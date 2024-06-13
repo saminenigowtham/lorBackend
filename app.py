@@ -39,9 +39,9 @@ jwt = JWTManager(app)
 @app.route('/register', methods=['POST'])
 def register():
     data = request.form.to_dict()
-    print(data)
+    # print(data)
     try:
-        print("hi")
+       
        
         username = data.get('username')
         email = data.get('email')
@@ -116,7 +116,7 @@ def stafflogin():
                 'expiration': expiration.strftime("%Y-%m-%d %H:%M:%S")
             }
             token_staff = create_access_token(identity=token_data)
-            print(token_staff)
+            # print(token_staff)
             return jsonify({'token_staff': token_staff, 'success': True}), 200
         else:
             return jsonify({'sucess':False}),201
@@ -134,7 +134,7 @@ def check_email_and_generate_otp():
             # Generate OTP
             totp = pyotp.TOTP(pyotp.random_base32(), interval=300)  # 5 minutes interval
             otp = totp.now()
-            print(otp)
+            # print(otp)
             # Store OTP and expiration time in the database
             expiration_time = datetime.utcnow() + timedelta(minutes=5)
             users_collection.update_one({'email': email}, {'$set': {'otp': otp, 'otp_expiration_time': expiration_time}})
@@ -181,7 +181,7 @@ def receive_application():
     current_user = get_jwt_identity()
     print(current_user)
     form_data = request.form.to_dict()
-    print(form_data)
+    # print(form_data)
     try:
         username = current_user['username']
         registerNo = current_user['registerNo']
@@ -194,14 +194,7 @@ def receive_application():
         # Fetch the user's email
         email_fetch = users_collection.find_one({'registerNumber': registerNo})
 
-        # # Find the file record
-        # file_record = student_grid_fs.find_one({'student_id': registerNo})
-        # if file_record:
-        #     file_id = str(file_record._id)
-        #     print("File ID:", file_id)
-        #     form_data["fileId"] = file_id
-
-        # collection.insert_one(form_data)
+        
 
         # Find all records in GridFS for the given student ID
         file_records = student_grid_fs.find({'student_id': registerNo})
@@ -336,7 +329,7 @@ def data_sender():
 @app.route('/student/dashboard/delete', methods=['DELETE'])  # Allow DELETE requests
 def handle_student_dashboard_delete():
     data = request.json  # Assuming you send JSON data with the application fields
-    print(data)
+    # print(data)
     register_number = data.get('registerNumber')  # Corrected key access
     print('for the data to delete :',register_number)
     if not register_number:
@@ -457,7 +450,7 @@ def student_card():
         # Convert ObjectId to string for JSON serialization
         for student in student_details:
             student['_id'] = str(student['_id'])
-        print(student_details)
+        # print(student_details)
         return jsonify(student_details)
     except Exception as e:
         print("Error fetching student details:", e)
@@ -598,7 +591,7 @@ def get_uploaded_documents():
                 'length': file.length
             }
             documents.append(document)
-        print(documents)
+        # print(documents)
         return jsonify({'documents': documents})
     except Exception as e:
         return jsonify({'error': str(e)})
@@ -731,7 +724,7 @@ def update_student_status(student_id):
     student = collection.find_one({'_id': ObjectId(student_id)})
     print(student)
     
-    print(f"Student details: {student}")
+    # print(f"Student details: {student}")
     if new_status=="approved":
         if student:
             student_name = student.get('name')
