@@ -240,7 +240,7 @@ def receive_application():
     <body>
         <div class="container">
             <p class="greeting">Hello {username},</p>
-            <p class="content">We are pleased to inform you that the application submitted by the student <b>{student_name}</b> with register number <b>{registerNo}</b> has been <b>approved</b>.</p>
+            <p class="content">We are pleased to inform you that the application submitted by the student <b>{username}</b> with register number <b>{registerNo}</b> has been <b>approved</b>.</p>
             <p class="content">The application was applied successfully and has met all the necessary criteria.</p>
             <p class="content">Thank you for your attention and cooperation.</p>
             <p class="signature">Best regards ,Sathyabama Institute of Science and Technology</p>
