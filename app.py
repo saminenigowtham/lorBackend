@@ -336,13 +336,13 @@ def handle_student_dashboard_delete():
         return jsonify({'error': 'Register Number not provided'}), 400
     
     # Perform deletion in MongoDB based on register number
-    result = collection.delete_one({'registerNumber': register_number})
+    collection.delete_one({'registerNumber': register_number})
     return jsonify({'message': 'Application deleted successfully'}), 200
-    if result.deleted_count == 1:
-        return jsonify({'message': 'Application deleted successfully'}), 200
-    else:
-        return jsonify({'error': 'Application not found'}), 404
-    return jsonify({'success': 'Application deleted successfully'})
+    # if result.deleted_count == 1:
+    #     return jsonify({'message': 'Application deleted successfully'}), 200
+    # else:
+    #     return jsonify({'error': 'Application not found'}), 404
+    # return jsonify({'success': 'Application deleted successfully'})
 
 
     # register_number = data.get('register_Number')
@@ -354,30 +354,24 @@ def student_upload_file_gridfs():
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file part'})
-        
+
         file = request.files['file']
         if file.filename == '':
             return jsonify({'error': 'No selected file'})
-        # Retrieve student ID from the request
+
+        # Retrieve student ID and count from the request
         student_id = request.form.get('studentId')
-        # Save the file to MongoDB GridFS
-        file_id = student_grid_fs.put(file, filename=file.filename,student_id=student_id)
-        # Retrieve the count value from the request
         count = request.form.get('count')
-        print(count)
-        print(student_id)
-        # Insert the file ID into the appropriate collection based on the count value
-        # if count == '1':
-        #     collection.update_one({'registerNumber': student_id}, {'$set': {'file_id1': str(file_id)}})
-        #     print("uploaded done")
-        # elif count == '2':
-        #     collection.update_one({'registerNumber': student_id}, {'$set': {'file_id2': str(file_id)}})
-        #     print("uploaded done")
-        # elif count == '3':
-        #     collection.update_one({'registerNumber': student_id}, {'$set': {'file_id3': str(file_id)}})
-        #     print("uploaded done")
-        # else:
-        #     return jsonify({'error': 'Invalid count value'})
+
+        # Check if a file with the same student_id and count already exists
+        existing_file = db['student_files.files'].find_one({'student_id': student_id, 'count': count})
+        if existing_file:
+            # Delete the existing file chunks and file entry
+            student_grid_fs.delete(existing_file['_id'])
+
+        # Save the new file to MongoDB GridFS
+        file_id = student_grid_fs.put(file, filename=file.filename, student_id=student_id, count=count)
+
         return jsonify({'success': True, 'file_id': str(file_id)})
     except Exception as e:
         return jsonify({'error': str(e)})
