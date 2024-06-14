@@ -364,10 +364,13 @@ def student_upload_file_gridfs():
         count = request.form.get('count')
 
         # Check if a file with the same student_id and count already exists
-        existing_file = db['student_files.files'].find_one({'student_id': student_id, 'count': count})
-        if existing_file:
+        existing_files = student_grid_fs.find({'student_id': student_id, 'count': count})
+        print("existing file id ",existing_files)
+       
+        for existing_file in existing_files:
+            print("id of file",existing_file._id)
             # Delete the existing file chunks and file entry
-            student_grid_fs.delete(existing_file['_id'])
+            student_grid_fs.delete(existing_file._id)
 
         # Save the new file to MongoDB GridFS
         file_id = student_grid_fs.put(file, filename=file.filename, student_id=student_id, count=count)
