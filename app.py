@@ -1,6 +1,7 @@
+import os
 from flask import Flask, request, jsonify,session,send_file
 from pymongo import MongoClient
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 from bson import ObjectId
 import base64
 import json
@@ -13,6 +14,9 @@ from email.mime.multipart import MIMEMultipart
 from flask_mail import Mail
 from gridfs import GridFS
 from apscheduler.schedulers.background import BackgroundScheduler
+from werkzeug.utils import secure_filename
+
+import driveAPI
 
 
 # Initialize Flask app
@@ -33,6 +37,46 @@ app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
 
 app.config['JWT_SECRET_KEY'] = '_5#y2L"F4Q8z\n\xec]/'  # Change this to a random secret key
 jwt = JWTManager(app)
+
+
+# Set the path for storing uploaded images
+UPLOAD_FOLDER = 'uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+upload_dir = os.path.join(app.root_path, UPLOAD_FOLDER)
+os.makedirs(upload_dir, exist_ok=True)
+
+# Set up Google Drive API
+SCOPES = ['https://www.googleapis.com/auth/drive.file']
+
+# drive code
+
+def get_drive_service():
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json')
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            # Set up your own credentials file
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+    return build('drive', 'v3', credentials=creds)
+
+def upload_to_google_drive(file_path, folder_id):
+    drive_service = get_drive_service()
+    file_metadata = {
+        'name': os.path.basename(file_path),
+        'parents': [folder_id],
+    }
+    media = MediaFileUpload(file_path, mimetype='image/jpeg')
+    file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+    file_id = file.get('id')
+    shareable_link = drive_service.files().get(fileId=file_id, fields='webViewLink').execute().get('webViewLink')
+    return shareable_link
 
 
 # Register
@@ -181,7 +225,7 @@ def receive_application():
     current_user = get_jwt_identity()
     print(current_user)
     form_data = request.form.to_dict()
-    # print(form_data)
+    print(form_data)
     try:
         username = current_user['username']
         registerNo = current_user['registerNo']
@@ -338,46 +382,98 @@ def handle_student_dashboard_delete():
     # Perform deletion in MongoDB based on register number
     collection.delete_one({'registerNumber': register_number})
     return jsonify({'message': 'Application deleted successfully'}), 200
-    # if result.deleted_count == 1:
-    #     return jsonify({'message': 'Application deleted successfully'}), 200
-    # else:
-    #     return jsonify({'error': 'Application not found'}), 404
-    # return jsonify({'success': 'Application deleted successfully'})
 
-
-    # register_number = data.get('register_Number')
 
 
 #documentation uploading
-@app.route('/student/upload', methods=['POST'])
-def student_upload_file_gridfs():
+# @app.route('/student/upload', methods=['POST'])
+# def student_upload_file_gridfs():
+#     try:
+#         if 'file' not in request.files:
+#             return jsonify({'error': 'No file part'})
+
+#         file = request.files['file']
+#         if file.filename == '':
+#             return jsonify({'error': 'No selected file'})
+
+#         # Retrieve student ID and count from the request
+#         student_id = request.form.get('studentId')
+#         count = request.form.get('count')
+
+#         # Check if a file with the same student_id and count already exists
+#         existing_files = student_grid_fs.find({'student_id': student_id, 'count': count})
+#         print("existing file id ",existing_files)
+       
+#         for existing_file in existing_files:
+#             print("id of file",existing_file._id)
+#             # Delete the existing file chunks and file entry
+#             student_grid_fs.delete(existing_file._id)
+
+#         # Save the new file to MongoDB GridFS
+#         file_id = student_grid_fs.put(file, filename=file.filename, student_id=student_id, count=count)
+
+#         return jsonify({'success': True, 'file_id': str(file_id)})
+#     except Exception as e:
+#         return jsonify({'error': str(e)})
+    
+FOLDER_ID = '11SCCKU5wyoQ30HgqSRz-5siWXBIvuCpM'
+
+@app.route("/student/upload", methods=["POST"])
+@cross_origin(origin='http://localhost:5173', headers=['Content-Type', 'Authorization'])
+def insert_sem_result():
+    db = client.studentsdb
+    result_collection = db.results
     try:
+        data = request.json
+        print(data)
         if 'file' not in request.files:
-            return jsonify({'error': 'No file part'})
+            return jsonify({"error": "No file part in the request"}), 400
 
         file = request.files['file']
+        regNo = request.form.get('regNo')
+        semester = request.form.get('semester')
+
         if file.filename == '':
-            return jsonify({'error': 'No selected file'})
+            return jsonify({"error": "No file selected for uploading"}), 400
 
-        # Retrieve student ID and count from the request
-        student_id = request.form.get('studentId')
-        count = request.form.get('count')
+        # Save file to temporary location
+        file_path = os.path.join(upload_dir, secure_filename(file.filename))
+        file.save(file_path)
 
-        # Check if a file with the same student_id and count already exists
-        existing_files = student_grid_fs.find({'student_id': student_id, 'count': count})
-        print("existing file id ",existing_files)
-       
-        for existing_file in existing_files:
-            print("id of file",existing_file._id)
-            # Delete the existing file chunks and file entry
-            student_grid_fs.delete(existing_file._id)
+        try:
+            # Check if a file with the same regNo and semester already exists
+            existing_files = result_collection.find_one({"regNo": regNo, f'{semester}': {"$exists": True}})
+            if existing_files:
+                # Delete the existing file from Google Drive
+                existing_file_id = existing_files.get(semester).split('/')[-1]
+                driveAPI.delete_file_from_drive(existing_file_id, SCOPES, driveAPI.SERVICE_ACCOUNT_FILE)
 
-        # Save the new file to MongoDB GridFS
-        file_id = student_grid_fs.put(file, filename=file.filename, student_id=student_id, count=count)
+            # Upload file to Google Drive
+            file_id = driveAPI.upload_file_to_drive(file_path, file.filename, FOLDER_ID, SCOPES, driveAPI.SERVICE_ACCOUNT_FILE)
+            file_link = f'https://drive.google.com/file/d/{file_id}'
+            print(file_id)
+            print(file_link)
 
-        return jsonify({'success': True, 'file_id': str(file_id)})
+            # Update MongoDB with file link, semester number, and registration number
+            result_collection.update_one(
+                {"regNo": regNo},
+                {"$set": {f'{semester}': file_link}},
+                upsert=True
+            )
+
+            return jsonify({"success": True, "fileLink": file_link}), 200
+        except Exception as e:
+            # traceback.print_exc()  # Print traceback for detailed error analysis
+            return jsonify({"error": str(e)}), 500
+        finally:
+            # Clean up temporary file
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
     except Exception as e:
-        return jsonify({'error': str(e)})
+        # traceback.print_exc()  # Print traceback for detailed error analysis
+        return jsonify({"error": str(e)}), 500
+
     
 @app.route('/student/upload/get', methods=['GET'])
 @jwt_required()
@@ -544,6 +640,7 @@ def delete_document():
         for file_record in file_records:
             # Delete the file record from GridFS
             dean_grid_fs.delete(file_record._id)
+            dean_grid_fs.chunks.delete_many({'files_id': file_record._id})
         # Update the collection to unset DeanfileIds
         collection.update_many({'registerNumber': student_id}, {'$unset': {'DeanfileId1': "", 'DeanfileId2': "", 'DeanfileId3': ""}})
         return jsonify({'success': True}), 200
