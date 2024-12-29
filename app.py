@@ -24,7 +24,19 @@ import driveAPI
 app = Flask(__name__)
 CORS(app)
 # Connect to MongoDB
-client = MongoClient("mongodb+srv://gouthamsamineni:goutham07@cluster0.qq257ti.mongodb.net/?retryWrites=true&w=majority")
+MONGO_URI = os.getenv("MONGO_URI")
+# Connect to MongoDB
+client = MongoClient(MONGO_URI)
+# Set a secret key for the Flask application
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
+app.config['JWT_SECRET_KEY'] = os.getenv("JWT_SECRET_KEY") # Change this to a random secret key
+
+FOLDER_ID = os.getenv("FOLDER_ID")
+DEAN_FOLDER_ID = os.getenv("DEAN_FOLDER_ID")
+STAFF_TO_DEAN_FOLDER_ID = os.getenv("STAFF_TO_DEAN_FOLDER_ID")
+
+jwt = JWTManager(app)
+
 db = client['LOR']
 collection = db['Student_Details']
 users_collection = db['signUp_details']
@@ -34,11 +46,6 @@ uplods_to_dean = db['upload']
 # grid_fs = GridFS(db, collection='upload')
 student_grid_fs = GridFS(db,collection='Student_Doc')
 # dean_grid_fs = GridFS(db,collection='Dean_Doc')
-# Set a secret key for the Flask application
-app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
-
-app.config['JWT_SECRET_KEY'] = '_5#y2L"F4Q8z\n\xec]/'  # Change this to a random secret key
-jwt = JWTManager(app)
 
 
 # Set the path for storing uploaded images
@@ -339,7 +346,7 @@ def handle_student_dashboard_delete():
 @app.route('/student/upload', methods=['POST'])
 
 def student_upload_file_to_drive():
-    FOLDER_ID = '11SCCKU5wyoQ30HgqSRz-5siWXBIvuCpM'
+    # FOLDER_ID = '11SCCKU5wyoQ30HgqSRz-5siWXBIvuCpM'
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file part'}), 400
@@ -478,7 +485,7 @@ def dean_visited():
 @app.route('/Dean/upload', methods=['POST'])
 def dean_upload_file():
     try:
-        DeanFolderID = '12VH2_qO0HKlZungRpOm19QIzSu2GTPPL'
+        # DeanFolderID = '12VH2_qO0HKlZungRpOm19QIzSu2GTPPL'
         
         # Ensure all required form data is present
         if 'file' not in request.files:
@@ -499,7 +506,7 @@ def dean_upload_file():
         file.save(temp_file_path)
 
         # Upload the file to Google Drive and get the shareable link
-        shareable_link = driveAPI.upload_file_to_drive(temp_file_path, file.filename, DeanFolderID)
+        shareable_link = driveAPI.upload_file_to_drive(temp_file_path, file.filename, DEAN_FOLDER_ID)
         formatted_link = f'https://drive.google.com/file/d/{shareable_link}'
         print("Shareable Link:", formatted_link)
 
@@ -569,7 +576,7 @@ def dean_upload_file():
 # staff uploading files
 @app.route('/staff/upload', methods=['POST'])
 def upload_file_gridfs():
-    staffToDean_FolderId = '118vzYmUzSJXYTewfwkxJ8-vPQmnK3lT9'
+    # staffToDean_FolderId = '118vzYmUzSJXYTewfwkxJ8-vPQmnK3lT9'
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file part'})
@@ -587,7 +594,7 @@ def upload_file_gridfs():
         file.save(temp_file_path)
 
         # Upload the file to Google Drive
-        shareable_link = driveAPI.upload_file_to_drive(temp_file_path, file.filename, staffToDean_FolderId)
+        shareable_link = driveAPI.upload_file_to_drive(temp_file_path, file.filename, STAFF_TO_DEAN_FOLDER_ID)
         formatted_link = f'https://drive.google.com/file/d/{shareable_link}'
         print(formatted_link)
 

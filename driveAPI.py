@@ -1,12 +1,23 @@
+from dotenv import load_dotenv
+import os
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
 
+# Load environment variables
+load_dotenv()
+
 # Google Drive API credentials
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
-SERVICE_ACCOUNT_FILE = 'Credentials.json'
-# Specify the folder ID where you want to upload the file
+SERVICE_ACCOUNT_FILE = os.getenv('GOOGLE_CREDENTIALS_PATH')
+
+
+if not SERVICE_ACCOUNT_FILE:
+    raise ValueError("GOOGLE_CREDENTIALS_PATH is not set in the .env file.")
+
+print("Google Credentials Path:", SERVICE_ACCOUNT_FILE)
+
 
 # Function to authenticate with Google Drive API
 def get_drive_service():
