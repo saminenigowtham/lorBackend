@@ -1,39 +1,40 @@
-
-
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
-import os
 from googleapiclient.http import MediaIoBaseUpload
 import io
-from google.auth.transport.requests import Request
-from google.oauth2 import service_account
-
 
 # Google Drive API credentials
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 SERVICE_ACCOUNT_FILE = 'Credentials.json'
-
 # Specify the folder ID where you want to upload the file
-FOLDER_ID = '11SCCKU5wyoQ30HgqSRz-5siWXBIvuCpM'
 
 # Function to authenticate with Google Drive API
-def get_drive_service(SERVICE_ACCOUNT_FILE, SCOPES):
+def get_drive_service():
     credentials = service_account.Credentials.from_service_account_file(
         SERVICE_ACCOUNT_FILE, scopes=SCOPES)
     drive_service = build('drive', 'v3', credentials=credentials)
     return drive_service
 
 # Function to upload file to Google Drive
-def upload_file_to_drive(file_path, file_name, FOLDER_ID, SCOPES , SERVICE_ACCOUNT_FILE ):
-    drive_service = get_drive_service(SERVICE_ACCOUNT_FILE, SCOPES )
+def upload_file_to_drive(file_path, file_name, folder_id):
+    drive_service = get_drive_service()
 
     file_metadata = {
         'name': file_name,
-        'parents': [FOLDER_ID]
+        'parents': [folder_id]  # Use the provided folder_id
     }
 
-    media = MediaIoBaseUpload(io.FileIO(file_path, 'rb'), mimetype='application/pdf', resumable=True)
+    # Determine the MIME type based on the file extension
+    mime_type = 'application/octet-stream'  # Default MIME type
+    if file_name.endswith('.pdf'):
+        mime_type = 'application/pdf'
+    elif file_name.endswith('.jpg') or file_name.endswith('.jpeg'):
+        mime_type = 'image/jpeg'
+    elif file_name.endswith('.png'):
+        mime_type = 'image/png'
+    # Add more MIME types as needed
+
+    media = MediaIoBaseUpload(io.FileIO(file_path, 'rb'), mimetype=mime_type, resumable=True)
 
     file = drive_service.files().create(
         body=file_metadata,
@@ -49,4 +50,3 @@ def upload_file_to_drive(file_path, file_name, FOLDER_ID, SCOPES , SERVICE_ACCOU
     drive_service.permissions().create(fileId=file['id'], body=permission).execute()
 
     return file['id']
-

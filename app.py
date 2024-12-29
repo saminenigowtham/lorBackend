@@ -1,12 +1,13 @@
 import os
-from flask import Flask, request, jsonify,session,send_file
+from sched import scheduler
+from flask import Flask, redirect, request, jsonify,session,send_file
 from pymongo import MongoClient
 from flask_cors import CORS, cross_origin
 from bson import ObjectId
 import base64
 import json
 import pyotp
-from flask_jwt_extended import JWTManager, jwt_required, create_access_token, get_jwt_identity
+from flask_jwt_extended import JWTManager, jwt_required, create_access_token, get_jwt_identity, verify_jwt_in_request
 from datetime import datetime, timedelta
 import smtplib
 from email.mime.text import MIMEText
@@ -29,9 +30,10 @@ collection = db['Student_Details']
 users_collection = db['signUp_details']
 staff_collection =db['staff_details']
 yearFilter = db['yearfilter']
-grid_fs = GridFS(db, collection='upload')
+uplods_to_dean = db['upload']
+# grid_fs = GridFS(db, collection='upload')
 student_grid_fs = GridFS(db,collection='Student_Doc')
-dean_grid_fs = GridFS(db,collection='Dean_Doc')
+# dean_grid_fs = GridFS(db,collection='Dean_Doc')
 # Set a secret key for the Flask application
 app.secret_key = b'_5#y2L"F4Q8z\n\xec]/'
 
@@ -50,33 +52,6 @@ os.makedirs(upload_dir, exist_ok=True)
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 # drive code
-
-def get_drive_service():
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json')
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            # Set up your own credentials file
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-    return build('drive', 'v3', credentials=creds)
-
-def upload_to_google_drive(file_path, folder_id):
-    drive_service = get_drive_service()
-    file_metadata = {
-        'name': os.path.basename(file_path),
-        'parents': [folder_id],
-    }
-    media = MediaFileUpload(file_path, mimetype='image/jpeg')
-    file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-    file_id = file.get('id')
-    shareable_link = drive_service.files().get(fileId=file_id, fields='webViewLink').execute().get('webViewLink')
-    return shareable_link
 
 
 # Register
@@ -127,7 +102,7 @@ def login():
         if user_data['password'] == password:
             print("password was correct")
             registerNo = user_data['registerNumber']
-            expiration = datetime.utcnow() + timedelta(seconds=250)  # Define expiration here
+            expiration = datetime.utcnow() + timedelta(seconds=2000)  # Define expiration here
             token_data = {
                 'username': username,
                 'registerNo': registerNo,
@@ -154,7 +129,7 @@ def stafflogin():
         print("user found")
         if user_data['password'] == password:
             print("password was correct")
-            expiration = datetime.utcnow() + timedelta(seconds=600)  # Define expiration here
+            expiration = datetime.utcnow() + timedelta(seconds=2000)  # Define expiration here
             token_data = {
                 'email': email,
                 'expiration': expiration.strftime("%Y-%m-%d %H:%M:%S")
@@ -221,7 +196,7 @@ def password_update():
 @app.route('/student/dashboard', methods=['POST'])
 @jwt_required()
 def receive_application():
-    print("application received")
+    print("Application received")
     current_user = get_jwt_identity()
     print(current_user)
     form_data = request.form.to_dict()
@@ -229,89 +204,66 @@ def receive_application():
     try:
         username = current_user['username']
         registerNo = current_user['registerNo']
-        
-        # Check if the application form has already been submitted
-        existing_application = collection.find_one({'registerNumber': registerNo})
-        if existing_application:
-            return jsonify({'error': 'Application already submitted'}), 400
 
         # Fetch the user's email
         email_fetch = users_collection.find_one({'registerNumber': registerNo})
 
-        
-
-        # Find all records in GridFS for the given student ID
-        file_records = student_grid_fs.find({'student_id': registerNo})
-
-        # Create a dictionary to store the named file IDs
-        file_ids_dict = {}
-
-        # Assign specific names to the file IDs (file_id1, file_id2, file_id3, etc.)
-        for index, record in enumerate(file_records, start=1):
-            # Create the key name based on the index (file_id1, file_id2, etc.)
-            key_name = f"file_id{index}"
-            file_ids_dict[key_name] = str(record._id)  # Convert ObjectId to string
-
-        # Add the named file IDs to the form data
-        form_data.update(file_ids_dict)
-
-        # Insert the form data into the MongoDB collection
-        collection.insert_one(form_data)
-            
+        # Use upsert to insert or update the form data
+        collection.update_one(
+            {'registerNumber': registerNo},  # Query filter
+            {'$set': form_data},            # Update or set new data
+            upsert=True                     # Create a new document if none exists
+        )
 
         # Send email to student
         student_email_submit = email_fetch.get('email')
         subject_student_submit = "Application was Applied Successfully (Student)"
         body_student_submit = f"""
         <html>
-    <head>
-        <style>
-            .greeting {{
-                font-size: 18px;
-                font-weight: bold;
-                color: #333333;
-            }}
-            .content {{
-                font-size: 16px;
-                color: #555555;
-            }}
-            .signature {{
-                font-size: 16px;
-                color: #A10035;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <p class="greeting">Hello {username},</p>
-            <p class="content">We are pleased to inform you that the application submitted by the student <b>{username}</b> with register number <b>{registerNo}</b> has been <b>approved</b>.</p>
-            <p class="content">The application was applied successfully and has met all the necessary criteria.</p>
-            <p class="content">Thank you for your attention and cooperation.</p>
-            <p class="signature">Best regards ,Sathyabama Institute of Science and Technology</p>
-        </div>
-    </body>
-</html>
-
+            <head>
+                <style>
+                    .greeting {{
+                        font-size: 18px;
+                        font-weight: bold;
+                        color: #333333;
+                    }}
+                    .content {{
+                        font-size: 16px;
+                        color: #555555;
+                    }}
+                    .signature {{
+                        font-size: 16px;
+                        color: #A10035;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <p class="greeting">Hello {username},</p>
+                    <p class="content">Your application has been successfully submitted/updated.</p>
+                    <p class="content">Thank you for using our platform!</p>
+                    <p class="signature">Best regards,<br>Sathyabama Institute of Science and Technology</p>
+                </div>
+            </body>
+        </html>
         """
         print(student_email_submit)
         send_email(subject_student_submit, body_student_submit, student_email_submit)
 
-        # Getting names and emails of the selected staff members
+        # Notify staff
         staff_names_submit = [form_data.get('prof1'), form_data.get('prof2'), form_data.get('prof3')]
-        staff_emails_submit = set()  # Using a set to ensure uniqueness
+        staff_emails_submit = set()  # Avoid duplicate emails
 
-        # Query the staff_details collection for the emails of the selected staff members
+        # Get staff emails
         for staff_name_submit in staff_names_submit:
             staff_details_submit = staff_collection.find_one({'name': staff_name_submit})
             if staff_details_submit:
                 staff_emails_submit.add(staff_details_submit.get('email'))
 
-        # Customized email design for staff
+        # Email template for staff
         subject_staff_submit = "Application Submit Notification (Staff)"
         student_name = form_data.get('name')
         student_reg = form_data.get('registerNumber')
-
-        # Construct the email body for staff
         body_staff_submit = f"""
         <html>
             <head>
@@ -334,25 +286,25 @@ def receive_application():
             <body>
                 <div class="container">
                     <p class="greeting">Respected colleague,</p>
-                    <p class="content">We are pleased to inform you that the application of the student <b>{student_name}</b> with register number <b>{student_reg}</b> has been <b>approved</b>.</p>
-                    <p class="content">Thank you for your attention and cooperation.</p>
+                    <p class="content">The application of the student <b>{student_name}</b> with register number <b>{student_reg}</b> has been submitted or updated.</p>
+                    <p class="content">Thank you for your cooperation.</p>
                     <p class="signature">Best regards,<br>Sathyabama Institute of Science and Technology</p>
                 </div>
             </body>
         </html>
         """
 
-        # Send email notifications to staff members
+        # Send staff notifications
         for staff_email in staff_emails_submit:
             print(staff_email)
             send_email(subject_staff_submit, body_staff_submit, staff_email)
-        
-        return jsonify({'message': 'Application received successfully'}), 200
+
+        return jsonify({'message': 'Application submitted/updated successfully'}), 200
 
     except Exception as e:
-        # Handle any unexpected errors
         print(f"An error occurred: {e}")
         return jsonify({'error': 'An unexpected error occurred'}), 500
+
 
 
 @app.route('/student/dashboard/getData', methods=['POST'])
@@ -383,101 +335,53 @@ def handle_student_dashboard_delete():
     collection.delete_one({'registerNumber': register_number})
     return jsonify({'message': 'Application deleted successfully'}), 200
 
+# documents uploading
+@app.route('/student/upload', methods=['POST'])
 
-
-#documentation uploading
-# @app.route('/student/upload', methods=['POST'])
-# def student_upload_file_gridfs():
-#     try:
-#         if 'file' not in request.files:
-#             return jsonify({'error': 'No file part'})
-
-#         file = request.files['file']
-#         if file.filename == '':
-#             return jsonify({'error': 'No selected file'})
-
-#         # Retrieve student ID and count from the request
-#         student_id = request.form.get('studentId')
-#         count = request.form.get('count')
-
-#         # Check if a file with the same student_id and count already exists
-#         existing_files = student_grid_fs.find({'student_id': student_id, 'count': count})
-#         print("existing file id ",existing_files)
-       
-#         for existing_file in existing_files:
-#             print("id of file",existing_file._id)
-#             # Delete the existing file chunks and file entry
-#             student_grid_fs.delete(existing_file._id)
-
-#         # Save the new file to MongoDB GridFS
-#         file_id = student_grid_fs.put(file, filename=file.filename, student_id=student_id, count=count)
-
-#         return jsonify({'success': True, 'file_id': str(file_id)})
-#     except Exception as e:
-#         return jsonify({'error': str(e)})
-    
-FOLDER_ID = '11SCCKU5wyoQ30HgqSRz-5siWXBIvuCpM'
-
-@app.route("/student/upload", methods=["POST"])
-@cross_origin(origin='http://localhost:5173', headers=['Content-Type', 'Authorization'])
-def insert_sem_result():
-    db = client.studentsdb
-    result_collection = db.results
+def student_upload_file_to_drive():
+    FOLDER_ID = '11SCCKU5wyoQ30HgqSRz-5siWXBIvuCpM'
     try:
-        data = request.json
-        print(data)
         if 'file' not in request.files:
-            return jsonify({"error": "No file part in the request"}), 400
+            return jsonify({'error': 'No file part'}), 400
 
         file = request.files['file']
-        regNo = request.form.get('regNo')
-        semester = request.form.get('semester')
-
         if file.filename == '':
-            return jsonify({"error": "No file selected for uploading"}), 400
+            return jsonify({'error': 'No selected file'}), 400
 
-        # Save file to temporary location
-        file_path = os.path.join(upload_dir, secure_filename(file.filename))
-        file.save(file_path)
+        # Retrieve student ID and count from the request
+        student_id = request.form.get('studentId')
+        count = request.form.get('count')
+        if not student_id or not count:
+            return jsonify({'error': 'Missing studentId or count'}), 400
 
-        try:
-            # Check if a file with the same regNo and semester already exists
-            existing_files = result_collection.find_one({"regNo": regNo, f'{semester}': {"$exists": True}})
-            if existing_files:
-                # Delete the existing file from Google Drive
-                existing_file_id = existing_files.get(semester).split('/')[-1]
-                driveAPI.delete_file_from_drive(existing_file_id, SCOPES, driveAPI.SERVICE_ACCOUNT_FILE)
+        # Save the file temporarily
+        temp_file_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
+        file.save(temp_file_path)
+        shareable_link = driveAPI.upload_file_to_drive(temp_file_path, file.filename,FOLDER_ID)
+        print(f'https://drive.google.com/file/d/{shareable_link}')
+        formatted_link = f'https://drive.google.com/file/d/{shareable_link}'
+        os.remove(temp_file_path)
 
-            # Upload file to Google Drive
-            file_id = driveAPI.upload_file_to_drive(file_path, file.filename, FOLDER_ID, SCOPES, driveAPI.SERVICE_ACCOUNT_FILE)
-            file_link = f'https://drive.google.com/file/d/{file_id}'
-            print(file_id)
-            print(file_link)
 
-            # Update MongoDB with file link, semester number, and registration number
-            result_collection.update_one(
-                {"regNo": regNo},
-                {"$set": {f'{semester}': file_link}},
-                upsert=True
-            )
-
-            return jsonify({"success": True, "fileLink": file_link}), 200
-        except Exception as e:
-            # traceback.print_exc()  # Print traceback for detailed error analysis
-            return jsonify({"error": str(e)}), 500
-        finally:
-            # Clean up temporary file
-            if os.path.exists(file_path):
-                os.remove(file_path)
-
+        # Update or insert the record in MongoDB
+        update_field = {f"file_id{count}": formatted_link}
+        collection.update_one(
+            {"registerNumber": student_id},
+            {"$set": update_field},
+            upsert=True
+        )
+        return jsonify({'success': True, 'shareable_link': shareable_link}), 200
     except Exception as e:
-        # traceback.print_exc()  # Print traceback for detailed error analysis
-        return jsonify({"error": str(e)}), 500
+        print(f"Error: {str(e)}")  # Log the error message
+        return jsonify({'error': str(e)}), 500
+
+    
+
 
     
 @app.route('/student/upload/get', methods=['GET'])
 @jwt_required()
-def get_file_data():
+def get_file_data():  
     try:
         # Get the current user's register number from the JWT token
         current_user_register_number = get_jwt_identity().get('registerNo')
@@ -496,29 +400,29 @@ def get_file_data():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/delete_gridfs_document', methods=['POST'])
-def delete_gridfs_document():
-    try:
-        register_number = request.json.get('registerNumber')
+# @app.route('/delete_gridfs_document', methods=['POST'])
+# def delete_gridfs_document():
+#     try:
+#         register_number = request.json.get('registerNumber')
 
-        print("Received registerNumber to delete:", register_number)
-        register_number = str(register_number)
-        # Find the file record based on the register number
-        # file_record = student_grid_fs.find_one({'student_id': register_number})
+#         print("Received registerNumber to delete:", register_number)
+#         register_number = str(register_number)
+#         # Find the file record based on the register number
+#         # file_record = student_grid_fs.find_one({'student_id': register_number})
 
-        file_records = student_grid_fs.find({'student_id': register_number})
+#         file_records = student_grid_fs.find({'student_id': register_number})
 
-        print("Query result:", file_records)
+#         print("Query result:", file_records)
 
-        # Delete each file record from GridFS
-        if file_records:
-            for file_record in file_records:
-                student_grid_fs.delete(file_record._id)
-            return jsonify({'success': True}), 200
-        else:
-            return jsonify({'error': 'File not found'}), 404
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+#         # Delete each file record from GridFS
+#         if file_records:
+#             for file_record in file_records:
+#                 student_grid_fs.delete(file_record._id)
+#             return jsonify({'success': True}), 200
+#         else:
+#             return jsonify({'error': 'File not found'}), 404
+#     except Exception as e:
+#         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/staff/dashboard', methods=['POST'])
@@ -574,83 +478,98 @@ def dean_visited():
 @app.route('/Dean/upload', methods=['POST'])
 def dean_upload_file():
     try:
-        file = request.files['file']
-        register_number = request.form['registerNumber']  # Get the register number from the request form data
-        # Calculate the expiry date (one month from now)
-        expiry_date = datetime.now() + timedelta(days=30)
-        # Save the file to GridFS with expiry metadata
-        file_id = dean_grid_fs.put(file, filename=file.filename, student_id=register_number, expiry=expiry_date)
-        count = request.form.get('count')
-        print(count)
+        DeanFolderID = '12VH2_qO0HKlZungRpOm19QIzSu2GTPPL'
         
-        # Update the student's database with the file ID
-        if count=='1':
-            print("deanfile 1 ")
-            collection.update_one({'registerNumber': register_number}, {'$set': {'DeanfileId1': str(file_id)}})
-            print("updated deanfile1")
-        elif count=='2':
-            print("deanfile 2")
-            collection.update_one({'registerNumber': register_number}, {'$set': {'DeanfileId2': str(file_id)}})
-            print("updated deanfile2")
-        elif count=='3':
-            print("deanfile 3")
-            collection.update_one({'registerNumber': register_number}, {'$set': {'DeanfileId3': str(file_id)}})
-            print("updated deanfile3")
-        else:
-            return jsonify({'error': 'Invalid count value'})
+        # Ensure all required form data is present
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part in the request'}), 400
 
-        return jsonify({'message': 'File uploaded successfully', 'file_id': str(file_id)}), 200
+        if 'registerNumber' not in request.form or 'count' not in request.form:
+            return jsonify({'error': 'Missing registerNumber or count in the form data'}), 400
+
+        file = request.files['file']
+        register_number = request.form['registerNumber']  # Get the register number from the form data
+        count = request.form.get('count')
+
+        if not file or file.filename == '':
+            return jsonify({'error': 'No file selected for upload'}), 400
+
+        # Save the file temporarily to the upload folder
+        temp_file_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
+        file.save(temp_file_path)
+
+        # Upload the file to Google Drive and get the shareable link
+        shareable_link = driveAPI.upload_file_to_drive(temp_file_path, file.filename, DeanFolderID)
+        formatted_link = f'https://drive.google.com/file/d/{shareable_link}'
+        print("Shareable Link:", formatted_link)
+
+        # Remove the temp file after upload
+        os.remove(temp_file_path)
+
+        # Update the MongoDB record based on count
+        update_field = f'DeanfileId{count}'
+        if count in ['1', '2', '3']:
+            collection.update_one({'registerNumber': register_number}, {'$set': {update_field: formatted_link}})
+            print(f"Updated {update_field} for register number {register_number}")
+        else:
+            return jsonify({'error': 'Invalid count value'}), 400
+
+        return jsonify({'message': 'File uploaded successfully', 'file_link': formatted_link}), 200
+
     except Exception as e:
+        print("Error:", str(e))
         return jsonify({'error': str(e)}), 400
 
 
-def delete_expired_files():
-    current_date = datetime.now()
-    expired_files = dean_grid_fs.find({'metadata.expiry': {'$lt': current_date}})
 
-    for file in expired_files:
-        dean_grid_fs.delete(file._id)
-        print(f"Deleted expired file: {file.filename}")
+# def delete_expired_files():
+#     current_date = datetime.now()
+#     expired_files = dean_grid_fs.find({'metadata.expiry': {'$lt': current_date}})
 
-# Configure and start the scheduler
-scheduler = BackgroundScheduler()
-scheduler.add_job(delete_expired_files, 'interval', days=1)  # Run daily
-scheduler.start()
+#     for file in expired_files:
+#         dean_grid_fs.delete(file._id)
+#         print(f"Deleted expired file: {file.filename}")
+
+# # Configure and start the scheduler
+# scheduler = BackgroundScheduler()
+# scheduler.add_job(delete_expired_files, 'interval', days=1)  # Run daily
+# scheduler.start()
 
 
 
 # dean delete
-@app.route('/dean/delete_document', methods=['POST'])
-def delete_document():
+# @app.route('/dean/delete_document', methods=['POST'])
+# def delete_document():
     
-    data = request.json
-    file_id = data.get('fileId')
-    student_id = data.get('student_id')
-    print('student_id for deleting from dean:', student_id)
-    print('front end data:', file_id)
+#     data = request.json
+#     file_id = data.get('fileId')
+#     student_id = data.get('student_id')
+#     print('student_id for deleting from dean:', student_id)
+#     print('front end data:', file_id)
 
-    try:
-        student_id = str(student_id)
-        # Find the file record based on the student_id
-        file_records = dean_grid_fs.find({'_id': student_id})
+#     try:
+#         student_id = str(student_id)
+#         # Find the file record based on the student_id
+#         file_records = dean_grid_fs.find({'_id': student_id})
 
-        print("Query result:", file_records)
+#         print("Query result:", file_records)
 
-        # Iterate over each file record
-        for file_record in file_records:
-            # Delete the file record from GridFS
-            dean_grid_fs.delete(file_record._id)
-            dean_grid_fs.chunks.delete_many({'files_id': file_record._id})
-        # Update the collection to unset DeanfileIds
-        collection.update_many({'registerNumber': student_id}, {'$unset': {'DeanfileId1': "", 'DeanfileId2': "", 'DeanfileId3': ""}})
-        return jsonify({'success': True}), 200
+#         # Iterate over each file record
+#         for file_record in file_records:
+#             # Delete the file record from GridFS
+#             dean_grid_fs.delete(file_record._id)
+#             dean_grid_fs.chunks.delete_many({'files_id': file_record._id})
+#         # Update the collection to unset DeanfileIds
+#         collection.update_many({'registerNumber': student_id}, {'$unset': {'DeanfileId1': "", 'DeanfileId2': "", 'DeanfileId3': ""}})
+#         return jsonify({'success': True}), 200
 
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
+#     except Exception as e:
+#         return jsonify({'error': str(e)}), 400
 
 # staff uploading files
 @app.route('/staff/upload', methods=['POST'])
 def upload_file_gridfs():
+    staffToDean_FolderId = '118vzYmUzSJXYTewfwkxJ8-vPQmnK3lT9'
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file part'})
@@ -660,29 +579,48 @@ def upload_file_gridfs():
         if file.filename == '':
             return jsonify({'error': 'No selected file'})
         
-        # Save the file to MongoDB GridFS
-        file_id = grid_fs.put(file, filename=file.filename,student_id=student_id)
-        return jsonify({'success': True, 'file_id': str(file_id)})
+        # Generate the formatted filename
+        filename = f"SIST-CSE-{student_id.upper()}-{file.filename.split('.')[0].upper()}.pdf"
+
+        # Save the file temporarily
+        temp_file_path = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
+        file.save(temp_file_path)
+
+        # Upload the file to Google Drive
+        shareable_link = driveAPI.upload_file_to_drive(temp_file_path, file.filename, staffToDean_FolderId)
+        formatted_link = f'https://drive.google.com/file/d/{shareable_link}'
+        print(formatted_link)
+
+        # Remove the temporary file
+        os.remove(temp_file_path)
+
+        # Insert the details into the MongoDB `uploads` collection
+        uplods_to_dean.insert_one({
+            'filename': filename,
+            'student_id': student_id,
+            'formatted_link': formatted_link
+        })
+
+        return jsonify({'success': True, 'file_id': formatted_link})
     except Exception as e:
         return jsonify({'error': str(e)})
+
 #Dean can see the documnents
 @app.route('/staff/documents', methods=['GET'])
 @jwt_required()
 def get_uploaded_documents():
     try:
         # Retrieve all files from GridFS collection
-        files = grid_fs.find()
+        files = uplods_to_dean.find()
         documents = []
 
         # Extract relevant information for each file
         for file in files:
             document = {
-                'file_id': str(file._id),
-                'filename': file.filename,
-                'upload_date': file.upload_date,
-                'content_type': file.content_type,
-                'registerNumber': file.student_id,
-                'length': file.length
+                'file_id': str(file['_id']),
+                'filename': file['filename'],
+                'registerNumber': file['student_id'],
+                'formatted_link': file['formatted_link'] 
             }
             documents.append(document)
         # print(documents)
@@ -690,109 +628,117 @@ def get_uploaded_documents():
     except Exception as e:
         return jsonify({'error': str(e)})
 # staff will download the document from student
-@app.route('/documentButton/<file_id>', methods=['GET'])
-def get_document_fromStudent(file_id):
+from flask import jsonify
+
+from flask import redirect, jsonify
+
+@app.route('/documentButton/<registerNumber>/<file_id>', methods=['GET'])
+def get_document_link(registerNumber, file_id):
     try:
-        # Convert the file_id parameter to ObjectId
-        file_id_object = ObjectId(file_id)
+        # Find the document in the student collection using the register number
+        student = collection.find_one({"registerNumber": registerNumber})
 
-        # Find the document file in GridFS by its ID
-        file = student_grid_fs.get(file_id_object)
+        if not student:
+            return jsonify({'error': 'Student not found'}), 404
 
-        # Check if the file exists
-        if file:
-            # Specify the MIME type based on the file extension
-            mimetype = 'application/octet-stream'  # Default MIME type
-            if file.filename.endswith('.pdf'):
-                mimetype = 'application/pdf'
-            elif file.filename.endswith('.docx'):
-                mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            # Add more conditions for other file types if needed
+        # Fetch the file link from the collection using the provided file_id
+        file_link = student.get(file_id)
 
-            # Return the file to the client with the specified MIME type
-            return send_file(file, as_attachment=True, mimetype=mimetype, download_name=file.filename)
-        else:
-            return jsonify({'error': 'Document not found'}), 404
+        if not file_link:
+            return jsonify({'error': 'File ID not found for the student'}), 404
+
+        # Redirect to the file link
+        return redirect(file_link)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 
-@app.route('/staff/documents/<file_id>', methods=['GET'])
-# @jwt_required()
-def get_document(file_id):
-    try:
-        # Find the document file in GridFS by its ID
-        file = grid_fs.get(ObjectId(file_id))
 
-        # Check if the file exists
-        if file:
-            # Specify the MIME type based on the file extension
-            mimetype = 'application/octet-stream'  # Default MIME type
-            if file.filename.endswith('.pdf'):
-                mimetype = 'application/pdf'
-            elif file.filename.endswith('.docx'):
-                mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            # Add more conditions for other file types if needed
+# @app.route('/staff/documents/<file_id>', methods=['GET'])
+# # @jwt_required()
+# def get_document(file_id):
+#     try:
+#         # Find the document file in GridFS by its ID
+#         file = grid_fs.get(ObjectId(file_id))
 
-            # Return the file to the client with the specified MIME type
-            return send_file(file, as_attachment=True, mimetype=mimetype, download_name=file.filename)
-        else:
-            return jsonify({'error': 'Document not found'}), 404
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-# student will dowload the file which student uploaded 
+#         # Check if the file exists
+#         if file:
+#             # Specify the MIME type based on the file extension
+#             mimetype = 'application/octet-stream'  # Default MIME type
+#             if file.filename.endswith('.pdf'):
+#                 mimetype = 'application/pdf'
+#             elif file.filename.endswith('.docx'):
+#                 mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+#             # Add more conditions for other file types if needed
+
+#             # Return the file to the client with the specified MIME type
+#             return send_file(file, as_attachment=True, mimetype=mimetype, download_name=file.filename)
+#         else:
+#             return jsonify({'error': 'Document not found'}), 404
+#     except Exception as e:
+#         return jsonify({'error': str(e)}), 500
+
+
+# student will dowload the file which student uploaded \
+@jwt_required()
 @app.route('/studentUploadedDocument/<file_id>', methods=['GET'])
-def document_uploaded_dowload(file_id):
+def document_uploaded_download(file_id):
+    print(file_id)
     try:
-        # Convert the file_id parameter to ObjectId
-        file_id_object = ObjectId(file_id)
+        verify_jwt_in_request()
+        # Retrieve the current user's register number from the JWT identity
+        current_user_register_number = get_jwt_identity().get('registerNo')
+        current_user_register_number = str(current_user_register_number)
 
-        # Find the document file in GridFS by its ID
-        file = student_grid_fs.get(file_id_object)
+        # Find the student record using the register number
+        student_record = collection.find_one({'registerNumber': current_user_register_number})
+        print(f"Student Record: {student_record}")
 
-        # Check if the file exists
-        if file:
-            # Specify the MIME type based on the file extension
-            mimetype = 'application/octet-stream'  # Default MIME type
-            if file.filename.endswith('.pdf'):
-                mimetype = 'application/pdf'
-            elif file.filename.endswith('.docx'):
-                mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            # Add more conditions for other file types if needed
+        if not student_record:
+            return jsonify({'error': 'Student record not found'}), 404
 
-            # Return the file to the client with the specified MIME type
-            return send_file(file, as_attachment=True, mimetype=mimetype, download_name=file.filename)
-        else:
-            return jsonify({'error': 'Document not found'}), 404
+        # Extract the file link using the provided file_id
+        file_link = student_record.get(file_id)
+        print(f"File Link: {file_link}")
+
+        if not file_link:
+            return jsonify({'error': 'File link not found'}), 404
+
+        # Return only the file URL, not wrapped in a JSON object
+        print(file_link)
+        return file_link, 200
+
     except Exception as e:
+        print(f"Error: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+
 # student will dowload the file from dean 
+@jwt_required()
 @app.route('/studentdocumentButton/<file_id>', methods=['GET'])
-def document_dowload_for_Student(file_id):
+def dean_uploaded_download(file_id):
     try:
-        # Convert the file_id parameter to ObjectId
-        file_id_object = ObjectId(file_id)
+        verify_jwt_in_request()
 
-        # Find the document file in GridFS by its ID
-        file = dean_grid_fs.get(file_id_object)
+        current_user_register_number = str(get_jwt_identity().get('registerNo'))
+        student_record = collection.find_one({'registerNumber': current_user_register_number})
 
-        # Check if the file exists
-        if file:
-            # Specify the MIME type based on the file extension
-            mimetype = 'application/octet-stream'  # Default MIME type
-            if file.filename.endswith('.pdf'):
-                mimetype = 'application/pdf'
-            elif file.filename.endswith('.docx'):
-                mimetype = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            # Add more conditions for other file types if needed
+        if not student_record:
+            return jsonify({'error': 'Student record not found'}), 404
 
-            # Return the file to the client with the specified MIME type
-            return send_file(file, as_attachment=True, mimetype=mimetype, download_name=file.filename)
-        else:
-            return jsonify({'error': 'Document not found'}), 404
+        # Fetch file link using the file_id key
+        file_link = student_record.get(file_id)
+
+        if not file_link:
+            return jsonify({'error': 'File link not found'}), 404
+
+        return file_link, 200
+
     except Exception as e:
+        print(f"Error: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
 # staff can see the approved students
 @app.route('/staff/filterStudents/<year>', methods=['GET'])
 # @jwt_required()
@@ -805,6 +751,41 @@ def details_of_students_approved(year):
         student['_id'] = str(student['_id'])
 
     return jsonify(student_details_year)
+
+# respone yes or no 
+
+responces = db['responce']
+@app.route('/respond/<register_number>/<staff_id>', methods=['POST'])
+def save_response(register_number, staff_id):
+    try:
+        data = request.json
+        response = data.get('response')  # "Yes" or "No"
+        reason = data.get('reason') if response == 'No' else None
+
+        if response not in ['Yes', 'No']:
+            return jsonify({'error': 'Valid response ("Yes" or "No") is required'}), 400
+
+        # Update the database with the response and reason (if applicable)
+        update_data = {'response': response}
+        if reason:
+            update_data['reason'] = reason
+
+        result = responces.update_one(
+            {'registerNumber': register_number, 'staffId': int(staff_id)},
+            {'$set': update_data},
+            upsert=True
+        )
+
+        # Check if a new document was inserted
+        if result.matched_count == 0 and result.upserted_id:
+            return jsonify({'message': 'New record created successfully', 'id': str(result.upserted_id)}), 201
+        elif result.matched_count > 0:
+            return jsonify({'message': 'Record updated successfully'}), 200
+        else:
+            return jsonify({'error': 'Unexpected error occurred'}), 500
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # MAIL Part
@@ -1061,7 +1042,7 @@ def send_email(subject, body, to_email):
     except Exception as e:
         print(f"Error sending email: {e}")
 if __name__ == "__main__":
-    try:
-        app.run(debug=True)
-    finally:
-        scheduler.shutdown(wait=False)
+    # try:
+    app.run(debug=True)
+    # finally:
+    #     scheduler.shutdown(wait=False)
